@@ -1,12 +1,14 @@
 // Pantallas del técnico: cargar un remito (con foto) y ver el estado de los suyos.
 import {
   estado, $, esc, hoy, fechaCorta, uid, recordar, aviso, ir, claseEstado, normalizarRemito,
-  htmlServiciosTecnico, conectarServicios, nombreServicio, refrescarPestanas,
+  htmlServiciosTecnico, conectarServicios, nombreServicio, refrescarPestanas, htmlCabeceraGrupo, chipsGrupo,
 } from './app.js';
 import { cola, borrador, procesarCola } from './cola.js';
 import { prepararFoto, armarPdf } from './pdf.js';
 import { editarFoto, miniatura } from './fotos.js';
-import { completarAutomaticos } from './excel.js';
+import { camposDeGrupo, usaGrupos, valoresDeGrupo, gruposDeRemito } from './excel.js';
+
+const grupoVacio = () => ({ extras: {}, cant: {} });
 
 // Cómo figura el técnico en la planilla de ese cliente: apellido (Valverdi) o nombre completo (Nicolas Valverdi)
 const nombreTecnico = cli => (cli?.responsable === 'completo' ? estado.usuario.displayName : estado.usuario.nombre);
@@ -27,8 +29,8 @@ function nuevoBorrador() {
     establecimiento: '',
     tecnico: nombreTecnico(estado.clientes?.[cliente]),
     acompanante: '',
-    extras: {},
-    cant: {},
+    // Servicios por grupo: uno solo, salvo clientes con campos por grupo (ej. una Línea de Halliburton por grupo)
+    grupos: [grupoVacio()],
     observaciones: '',
     paginas: [],
     archivoPrevio: false,
@@ -45,6 +47,8 @@ export async function vistaNuevo(vista) {
   let b = (await borrador.leer().catch(() => null)) || nuevoBorrador();
   if (estado.corregir) { b = estado.corregir; estado.corregir = null; }
   if (!estado.clientes[b.cliente]) b.cliente = Object.keys(estado.clientes)[0];
+  // Borradores de versiones anteriores: servicios y campos sueltos pasan a ser el primer grupo
+  if (!b.grupos) b.grupos = [{ extras: b.extras || {}, cant: b.cant || {} }];
 
   let tGuardar;
   const guardarBorrador = () => { clearTimeout(tGuardar); tGuardar = setTimeout(() => borrador.guardar(b).catch(() => {}), 300); };
@@ -53,11 +57,13 @@ export async function vistaNuevo(vista) {
     const cli = estado.clientes[b.cliente];
     const est = (cli.establecimientos || []).find(e => e.nombre === b.establecimiento);
     const claves = Object.keys(estado.clientes);
-    b.extras = b.extras || {};
-    const extrasTecnico = (cli.extras || []).filter(d => d.quien === 'tecnico');
+    const conGrupos = usaGrupos(cli);
+    const elegibles = camposDeGrupo(cli.extras).filter(d => d.quien !== 'auto');
     // Un campo con una sola opción viene elegido
-    for (const d of extrasTecnico) if (!b.extras[d.campo] && d.opciones?.length === 1) b.extras[d.campo] = d.opciones[0];
-    const autos = completarAutomaticos(cli.extras, b.extras);
+    for (const gr of b.grupos) {
+      for (const d of elegibles) if (!gr.extras[d.campo] && d.opciones?.length === 1) gr.extras[d.campo] = d.opciones[0];
+    }
+    const uso = recordar('uso-' + b.cliente) || {};
     vista.innerHTML = `
       <h1 class="titulo">${b.itemId ? 'Corregir remito' : 'Nuevo remito'}</h1>
       ${b.comentario ? `<div class="mensaje alerta"><b>Observación de la revisión:</b> ${esc(b.comentario)}</div>` : ''}
@@ -78,14 +84,6 @@ export async function vistaNuevo(vista) {
         </div>
         <label for="f-acomp">Acompañante (opcional, apellido)</label>
         <input id="f-acomp" value="${esc(b.acompanante || '')}" placeholder="Si fueron dos técnicos">
-        ${extrasTecnico.map(d => `
-          <label for="x-${esc(d.campo)}">${esc(d.etiqueta)}${d.obligatorio ? '' : ' (opcional)'}</label>
-          <select id="x-${esc(d.campo)}" data-extra="${esc(d.campo)}">
-            <option value="">Elegir…</option>
-            ${(d.opciones || []).map(o => `<option ${o === b.extras[d.campo] ? 'selected' : ''}>${esc(o)}</option>`).join('')}
-          </select>`).join('')}
-        <p class="ayuda" id="autos">${(cli.extras || []).filter(d => d.quien === 'auto' && autos[d.campo] !== '')
-          .map(d => `${esc(d.etiqueta)} <span class="chip">${esc(autos[d.campo])}</span>`).join(' ')}</p>
         <label for="f-estab">Establecimiento / Pozo</label>
         ${cli.establecimientos?.length ? `<select id="f-estab">
           <option value="">Elegir…</option>
@@ -97,7 +95,12 @@ export async function vistaNuevo(vista) {
       <section class="tarjeta">
         <h2>Servicios realizados</h2>
         <p class="ayuda" style="margin:0 0 8px">Cargá lo mismo que escribiste en el remito.</p>
-        <div id="servicios">${htmlServiciosTecnico(cli, b.cant, recordar('uso-' + b.cliente) || {})}</div>
+        <div id="servicios">${b.grupos.map((gr, g) => `<div class="${conGrupos ? 'grupo' : ''}" data-grupo="${g}">
+          ${conGrupos ? htmlCabeceraGrupo(cli.extras, gr.extras, g, b.grupos.length) : ''}
+          <div class="servicios-g">${htmlServiciosTecnico(cli, gr.cant, uso)}</div></div>`).join('')}</div>
+        ${conGrupos ? `<div class="acciones"><button type="button" id="btn-grupo">+ Agregar otra ${esc((elegibles[0]?.etiqueta || 'grupo').toLowerCase())}</button></div>
+          <p class="ayuda">Si el remito tiene trabajos para más de una ${esc((elegibles[0]?.etiqueta || 'grupo').toLowerCase())}, cargá cada una por separado.
+          Los KM y lo común van en una sola.</p>` : ''}
         <label for="f-obs">Observaciones (opcional)</label>
         <textarea id="f-obs" rows="2">${esc(b.observaciones)}</textarea>
       </section>
@@ -158,18 +161,23 @@ export async function vistaNuevo(vista) {
   function conectar() {
     const on = (sel, ev, fn) => $(sel, vista)?.addEventListener(ev, fn);
     on('#f-cliente', 'change', e => {
-      b.cliente = e.target.value; b.establecimiento = ''; b.cant = {}; b.extras = {};
+      b.cliente = e.target.value; b.establecimiento = ''; b.grupos = [grupoVacio()];
       if (!b.tecnicoEditado) b.tecnico = nombreTecnico(estado.clientes[b.cliente]);
       guardarBorrador(); pintar();
     });
     on('#f-acomp', 'input', e => { b.acompanante = e.target.value; guardarBorrador(); });
-    vista.querySelectorAll('[data-extra]').forEach(sel => sel.addEventListener('input', () => {
-      b.extras[sel.dataset.extra] = sel.value;
-      const cli = estado.clientes[b.cliente];
-      const autos = completarAutomaticos(cli.extras, b.extras);
-      $('#autos', vista).innerHTML = (cli.extras || []).filter(d => d.quien === 'auto' && autos[d.campo] !== '')
-        .map(d => `${esc(d.etiqueta)} <span class="chip">${esc(autos[d.campo])}</span>`).join(' ');
+    // Campos de cada grupo (ej. Línea) y lo que se calcula de ellos (ej. Centro de costo)
+    vista.querySelectorAll('[data-gextra]').forEach(sel => sel.addEventListener('input', () => {
+      const gr = b.grupos[+sel.dataset.g];
+      gr.extras[sel.dataset.gextra] = sel.value;
+      vista.querySelector(`[data-autos-g="${sel.dataset.g}"]`).innerHTML = chipsGrupo(estado.clientes[b.cliente].extras, gr.extras);
       guardarBorrador();
+    }));
+    on('#btn-grupo', 'click', () => { b.grupos.push(grupoVacio()); guardarBorrador(); pintar(); });
+    vista.querySelectorAll('[data-quitar-grupo]').forEach(btn => btn.addEventListener('click', () => {
+      if (!confirm('¿Quitar este grupo y sus servicios?')) return;
+      b.grupos.splice(+btn.dataset.quitarGrupo, 1);
+      guardarBorrador(); pintar();
     }));
     on('#f-pv', 'input', e => { b.pv = e.target.value; guardarBorrador(); });
     on('#f-numero', 'input', e => { b.numero = e.target.value; guardarBorrador(); });
@@ -182,7 +190,8 @@ export async function vistaNuevo(vista) {
       $('#zona', vista).innerHTML = est ? `Zona <span class="chip">${esc(est.zona)}</span>` : '';
       guardarBorrador();
     });
-    conectarServicios($('#servicios', vista), b.cant, guardarBorrador);
+    vista.querySelectorAll('[data-grupo]').forEach(div =>
+      conectarServicios($('.servicios-g', div), b.grupos[+div.dataset.grupo].cant, guardarBorrador));
     on('#f-camara', 'change', e => agregarFotos([...e.target.files]));
     on('#f-galeria', 'change', e => agregarFotos([...e.target.files]));
     on('#btn-enviar', 'click', enviar);
@@ -202,10 +211,14 @@ export async function vistaNuevo(vista) {
     else if (b.fechaRemito > hoy()) err.push('La fecha no puede ser futura.');
     if (!b.establecimiento) err.push('Completá el establecimiento o pozo.');
     if (!b.tecnico.trim()) err.push('Falta el nombre del técnico.');
-    if (!cli.items.some(it => it.planilla !== false && +b.cant[it.cod] > 0)) err.push('Cargá al menos un servicio.');
-    for (const d of (cli.extras || []).filter(x => x.quien === 'tecnico' && x.obligatorio)) {
-      if (!b.extras?.[d.campo]) err.push(`Elegí ${d.etiqueta.toLowerCase()}.`);
-    }
+    const cargado = gr => cli.items.some(it => it.planilla !== false && +gr.cant[it.cod] > 0);
+    if (!b.grupos.some(cargado)) err.push('Cargá al menos un servicio.');
+    const obligatorios = camposDeGrupo(cli.extras).filter(d => d.quien !== 'auto' && d.obligatorio);
+    b.grupos.forEach((gr, g) => {
+      const n = b.grupos.length > 1 ? ` (grupo ${g + 1})` : '';
+      for (const d of obligatorios) if (!gr.extras[d.campo]) err.push(`Elegí ${d.etiqueta.toLowerCase()}${n}.`);
+      if (g > 0 && !Object.values(gr.cant).some(v => +v > 0)) err.push(`El grupo ${g + 1} no tiene servicios: cargalos o quitalo.`);
+    });
     if (!b.paginas.length && !b.archivoPrevio) err.push('Falta la foto del remito firmado.');
     return err;
   }
@@ -234,13 +247,13 @@ export async function vistaNuevo(vista) {
         }
       }
       const est = (cli.establecimientos || []).find(e => e.nombre === b.establecimiento);
-      const items = cli.items
-        .filter(it => +b.cant[it.cod] > 0)
-        .map(it => ({ cod: it.cod, servicio: it.servicio, cant: +b.cant[it.cod] }));
+      // Cada ítem lleva su grupo (g); cada grupo, sus campos (ej. línea y centro de costo)
+      const items = b.grupos.flatMap((gr, g) => cli.items
+        .filter(it => +gr.cant[it.cod] > 0)
+        .map(it => ({ cod: it.cod, servicio: it.servicio, cant: +gr.cant[it.cod], g })));
       const kmItem = cli.items.find(it => it.unidad === 'km' || String(it.cod).toUpperCase() === 'KM');
-      // Solo lo que carga el técnico y lo que se calcula de eso; lo del revisor se completa en la oficina
-      const extras = completarAutomaticos(cli.extras, Object.fromEntries(
-        (cli.extras || []).filter(d => d.quien === 'tecnico').map(d => [d.campo, b.extras?.[d.campo] || ''])));
+      const km = kmItem ? items.filter(it => it.cod === kmItem.cod).reduce((s, it) => s + it.cant, 0) : 0;
+      const gruposExtras = usaGrupos(cli) ? b.grupos.map(gr => valoresDeGrupo(cli.extras, gr.extras)) : [];
       const entrada = {
         idLocal: b.idLocal,
         itemId: b.itemId,
@@ -255,10 +268,12 @@ export async function vistaNuevo(vista) {
           tecnico: responsable(b),
           tecnicoEmail: estado.usuario.email,
           items,
-          extras,
+          // Los campos por remito (ej. Sector) los completa la oficina; se conservan si es una corrección
+          extras: b.extrasRemito || {},
+          gruposExtras,
           // Corrección sin fotos nuevas: se conservan las fotos originales que ya estaban
           ...(b.paginas.length ? {} : { paginas: b.paginasPrevias || [] }),
-          km: kmItem ? +b.cant[kmItem.cod] || 0 : 0,
+          km,
           observaciones: b.observaciones.trim(),
         },
         pdf: b.paginas.length ? await armarPdf(b.paginas) : null,
@@ -350,8 +365,8 @@ export async function vistaMisRemitos(vista) {
       estado.corregir = {
         idLocal: r.idLocal || uid(), itemId: r.id, cliente: r.cliente, pv, numero,
         fechaRemito: r.fechaRemito, establecimiento: r.establecimiento, tecnico: r.tecnico,
-        cant: Object.fromEntries(r.items.map(i => [i.cod, i.cant])),
-        extras: { ...(r.extras || {}) }, acompanante: '', tecnicoEditado: true, paginasPrevias: r.paginas || [],
+        grupos: gruposDeRemito(r, estado.clientes?.[r.cliente]?.extras),
+        extrasRemito: { ...(r.extras || {}) }, acompanante: '', tecnicoEditado: true, paginasPrevias: r.paginas || [],
         observaciones: r.observaciones, paginas: [], archivoPrevio: !!r.archivoId, comentario: r.comentario,
       };
       ir('nuevo');

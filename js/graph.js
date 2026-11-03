@@ -122,8 +122,9 @@ function aCampos(r) {
     Tecnico: r.tecnico,
     TecnicoEmail: r.tecnicoEmail,
     // Con campos adicionales o fotos originales se guarda { items, extras, paginas }; si no, la lista sola (formato original)
-    Items: JSON.stringify((r.extras && Object.keys(r.extras).length) || r.paginas?.length
-      ? { items: r.items || [], extras: r.extras || {}, paginas: r.paginas || [] } : r.items || []),
+    Items: JSON.stringify((r.extras && Object.keys(r.extras).length) || r.paginas?.length || r.gruposExtras?.length
+      ? { items: r.items || [], extras: r.extras || {}, paginas: r.paginas || [], gruposExtras: r.gruposExtras || [] }
+      : r.items || []),
     Kilometros: +r.km || 0,
     Observaciones: r.observaciones || '',
     Estado: r.estado,
@@ -139,10 +140,10 @@ function aCampos(r) {
 
 function deItem(it) {
   const f = it.fields;
-  let items = [], extras = {}, paginas = [];
+  let items = [], extras = {}, paginas = [], gruposExtras = [];
   try {
     const j = JSON.parse(f.Items || '[]');
-    if (Array.isArray(j)) items = j; else ({ items = [], extras = {}, paginas = [] } = j);
+    if (Array.isArray(j)) items = j; else ({ items = [], extras = {}, paginas = [], gruposExtras = [] } = j);
   } catch { /* vacío */ }
   return {
     id: it.id,
@@ -158,6 +159,7 @@ function deItem(it) {
     items,
     extras,
     paginas,
+    gruposExtras,
     km: f.Kilometros || 0,
     observaciones: f.Observaciones || '',
     estado: f.Estado,

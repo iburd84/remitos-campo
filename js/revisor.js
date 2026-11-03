@@ -2,9 +2,9 @@
 // Lo que corrige el revisor tiene prioridad sobre lo que cargó el técnico.
 import {
   estado, $, esc, fechaCorta, recordar, aviso, ir, claseEstado, normalizarRemito,
-  htmlServicios, conectarServicios,
+  htmlServicios, conectarServicios, htmlCabeceraGrupo, chipsGrupo,
 } from './app.js';
-import { completarAutomaticos } from './excel.js';
+import { completarAutomaticos, camposDeGrupo, usaGrupos, valoresDeGrupo, gruposDeRemito } from './excel.js';
 import { editarFoto, miniatura } from './fotos.js';
 import { prepararFoto, armarPdf } from './pdf.js';
 
@@ -41,8 +41,13 @@ async function detalle(vista, id) {
   r = { ...r };
   if (!r.fechaSolicitud) r.fechaSolicitud = recordar('ultimaFechaSolicitud') || '';
   if (!r.periodo) r.periodo = recordar('ultimoPeriodo') || r.fechaRemito.slice(0, 7);
-  const cant = Object.fromEntries(r.items.map(i => [i.cod, i.cant]));
   const [pv, numero] = r.remito.split('-');
+  // Servicios por grupo (ej. una línea de Halliburton cada uno); campos de grupo y campos por remito
+  const conGrupos = usaGrupos(cli);
+  const grupos = gruposDeRemito(r, cli.extras);
+  const deGrupo = new Set(camposDeGrupo(cli.extras).map(d => d.campo));
+  const extrasRemito = (cli.extras || []).filter(d => !deGrupo.has(d.campo));
+  const etiquetaGrupo = (camposDeGrupo(cli.extras).find(d => d.quien !== 'auto')?.etiqueta || 'grupo').toLowerCase();
 
   vista.innerHTML = `
     <p><a href="#revision">← Volver a la lista</a></p>
@@ -69,7 +74,7 @@ async function detalle(vista, id) {
             ${cli.establecimientos.some(e => e.nombre === r.establecimiento) ? '' : `<option selected>${esc(r.establecimiento)}</option>`}</select>`
             : `<input id="f-estab" value="${esc(r.establecimiento)}">`}
           <p class="ayuda" id="zona">${r.zona ? `Zona <span class="chip">${esc(r.zona)}</span>` : ''}</p>
-          ${(cli.extras || []).filter(d => d.quien !== 'auto').map(d => {
+          ${extrasRemito.filter(d => d.quien !== 'auto').map(d => {
             const v = r.extras?.[d.campo] || (d.opciones?.length === 1 ? d.opciones[0] : '');
             const ops = (d.opciones || []).includes(v) || !v ? d.opciones || [] : [v, ...(d.opciones || [])];
             return `<label for="x-${esc(d.campo)}">${esc(d.etiqueta)}${d.quien === 'revisor' ? ' (lo completa la oficina)' : ''}</label>
@@ -90,7 +95,8 @@ async function detalle(vista, id) {
         <section class="tarjeta">
           <h2>Servicios</h2>
           <p class="ayuda" style="margin:-4px 0 8px">Resaltado: lo que cargó el técnico.</p>
-          <div id="servicios">${htmlServicios(cli.items, cant, { separarCargados: true, unidades: !!cli.separarUnidades })}</div>
+          <div id="servicios"></div>
+          ${conGrupos ? `<div class="acciones"><button type="button" id="btn-grupo">+ Agregar otra ${esc(etiquetaGrupo)}</button></div>` : ''}
           ${r.observaciones ? `<label>Observaciones del técnico</label><p style="margin:0">${esc(r.observaciones)}</p>` : ''}
         </section>
         <section class="tarjeta">
@@ -113,19 +119,43 @@ async function detalle(vista, id) {
       </div>
     </div>`;
 
-  conectarServicios($('#servicios', vista), cant);
+  function pintarServicios() {
+    $('#servicios', vista).innerHTML = grupos.map((gr, g) => `<div class="${conGrupos ? 'grupo' : ''}" data-grupo="${g}">
+      ${conGrupos ? htmlCabeceraGrupo(cli.extras, gr.extras, g, grupos.length) : ''}
+      <div class="servicios-g">${htmlServicios(cli.items, gr.cant, { separarCargados: true, unidades: !!cli.separarUnidades })}</div>
+    </div>`).join('');
+    vista.querySelectorAll('#servicios [data-grupo]').forEach(div =>
+      conectarServicios($('.servicios-g', div), grupos[+div.dataset.grupo].cant));
+    vista.querySelectorAll('#servicios [data-gextra]').forEach(sel => sel.addEventListener('input', () => {
+      const gr = grupos[+sel.dataset.g];
+      gr.extras[sel.dataset.gextra] = sel.value;
+      vista.querySelector(`[data-autos-g="${sel.dataset.g}"]`).innerHTML = chipsGrupo(cli.extras, gr.extras);
+    }));
+    vista.querySelectorAll('#servicios [data-quitar-grupo]').forEach(btn => btn.addEventListener('click', () => {
+      const g = +btn.dataset.quitarGrupo;
+      if (Object.values(grupos[g].cant).some(v => +v > 0) && !confirm('Este grupo tiene servicios. ¿Quitarlo igual?')) return;
+      grupos.splice(g, 1);
+      pintarServicios();
+    }));
+  }
+  pintarServicios();
+  $('#btn-grupo', vista)?.addEventListener('click', () => { grupos.push({ extras: {}, cant: {} }); pintarServicios(); });
+
   $('#f-estab', vista).addEventListener('input', e => {
     const est = (cli.establecimientos || []).find(x => x.nombre === e.target.value);
     r.zona = est?.zona || r.zona;
     $('#zona', vista).innerHTML = r.zona ? `Zona <span class="chip">${esc(r.zona)}</span>` : '';
   });
 
-  // Campos adicionales: lo elegido en pantalla más lo que se calcula de eso (ej. centro de costo según línea)
-  const leerExtras = () => completarAutomaticos(cli.extras, Object.fromEntries(
-    [...vista.querySelectorAll('[data-extra]')].map(s => [s.dataset.extra, s.value])));
+  // Campos por remito (ej. Sector): lo elegido más lo que se calcula de eso; los de grupo van aparte
+  const leerExtras = () => {
+    const v = completarAutomaticos(cli.extras, Object.fromEntries(
+      [...vista.querySelectorAll('[data-extra]')].map(s => [s.dataset.extra, s.value])));
+    return Object.fromEntries(extrasRemito.map(d => [d.campo, v[d.campo] ?? '']));
+  };
   const pintarAutos = () => {
     const v = leerExtras();
-    $('#autos', vista).innerHTML = (cli.extras || []).filter(d => d.quien === 'auto' && v[d.campo] !== '')
+    $('#autos', vista).innerHTML = extrasRemito.filter(d => d.quien === 'auto' && v[d.campo] !== '')
       .map(d => `${esc(d.etiqueta)} <span class="chip">${esc(v[d.campo])}</span>`).join(' ');
   };
   vista.querySelectorAll('[data-extra]').forEach(s => s.addEventListener('input', pintarAutos));
@@ -236,9 +266,11 @@ async function detalle(vista, id) {
       fechaSolicitud: $('#f-solicitud', vista).value,
       periodo: $('#f-periodo', vista).value,
       establecimiento: $('#f-estab', vista).value,
-      items: cli.items.filter(it => +cant[it.cod] > 0).map(it => ({ cod: it.cod, servicio: it.servicio, cant: +cant[it.cod] })),
-      km: +(cant[cli.items.find(it => it.unidad === 'km')?.cod ?? 'KM'] || 0),
+      items: grupos.flatMap((gr, g) => cli.items.filter(it => +gr.cant[it.cod] > 0)
+        .map(it => ({ cod: it.cod, servicio: it.servicio, cant: +gr.cant[it.cod], g }))),
+      km: grupos.reduce((s, gr) => s + (+gr.cant[cli.items.find(it => it.unidad === 'km')?.cod ?? 'KM'] || 0), 0),
       extras: leerExtras(),
+      gruposExtras: conGrupos ? grupos.map(gr => valoresDeGrupo(cli.extras, gr.extras)) : [],
       revisor: estado.usuario.displayName,
     };
   }
@@ -283,8 +315,11 @@ async function detalle(vista, id) {
     if (!d.fechaSolicitud) faltan.push('fecha de solicitud');
     if (!d.periodo) faltan.push('período');
     if (!d.tecnico) faltan.push('responsable');
-    for (const x of (cli.extras || []).filter(x => x.quien !== 'auto' && x.obligatorio)) {
+    for (const x of extrasRemito.filter(x => x.quien !== 'auto' && x.obligatorio)) {
       if (!d.extras[x.campo]) faltan.push(x.etiqueta.toLowerCase());
+    }
+    for (const x of camposDeGrupo(cli.extras).filter(x => x.quien !== 'auto' && x.obligatorio)) {
+      d.gruposExtras.forEach((ge, g) => { if (!ge[x.campo]) faltan.push(`${x.etiqueta.toLowerCase()}${grupos.length > 1 ? ` (grupo ${g + 1})` : ''}`); });
     }
     if (!d.items.some(i => cli.items.find(c => String(c.cod) === String(i.cod))?.planilla !== false)) faltan.push('al menos un servicio');
     if (faltan.length) { msg('Falta: ' + faltan.join(', ') + '.', 'error'); return; }

@@ -273,6 +273,11 @@ button:disabled { opacity: .55; cursor: not-allowed; }
 .otros-servicios { margin-top: 12px; }
 .otros-servicios > summary { cursor: pointer; color: var(--marca-osc); font-weight: 600; padding: 8px 0; }
 
+/* Grupos de un remito (una línea cada uno) */
+.grupo { border: 1px solid var(--borde); border-radius: 12px; padding: 12px; margin-bottom: 12px; }
+.grupo-cab { margin-bottom: 8px; }
+.grupo-cab .fila b { color: var(--marca-osc); }
+
 /* Fotos en la revisión */
 .fotos-revision { display: grid; grid-template-columns: repeat(auto-fill, minmax(84px, 1fr)); gap: 8px; }
 .foto.cambiada { outline: 3px solid var(--alerta); }

@@ -116,6 +116,33 @@ export function completarAutomaticos(defs, valores) {
   return v;
 }
 
+// ---------- Grupos dentro de un remito (ej. un remito con trabajos para dos líneas de Halliburton) ----------
+// Van por grupo los campos que completa el técnico y los automáticos que salen de ellos (Línea → Centro de costo).
+// Los del revisor (ej. Sector) van una vez por remito.
+export function camposDeGrupo(defs = []) {
+  const tec = defs.filter(d => d.quien === 'tecnico');
+  const campos = new Set(tec.map(d => d.campo));
+  return [...tec, ...defs.filter(d => d.quien === 'auto' && campos.has(d.segun))];
+}
+export const usaGrupos = cli => (cli?.extras || []).some(d => d.quien === 'tecnico');
+
+// Valores de un grupo: lo elegido más lo que se calcula de eso, solo con los campos de grupo
+export function valoresDeGrupo(defs, elegidos) {
+  const campos = camposDeGrupo(defs).map(d => d.campo);
+  const v = completarAutomaticos(defs, Object.fromEntries(campos.map(c => [c, elegidos?.[c] || ''])));
+  return Object.fromEntries(campos.map(c => [c, v[c] ?? '']));
+}
+
+// Grupos de un remito guardado; los anteriores a los grupos (o de clientes sin grupos) son un solo grupo
+export function gruposDeRemito(remito, defs = []) {
+  const n = Math.max(1, remito.gruposExtras?.length || 0, ...(remito.items || []).map(it => (it.g || 0) + 1));
+  const campos = camposDeGrupo(defs).map(d => d.campo);
+  return Array.from({ length: n }, (_, g) => ({
+    extras: remito.gruposExtras?.[g] || (g === 0 ? Object.fromEntries(campos.map(c => [c, remito.extras?.[c] || ''])) : {}),
+    cant: Object.fromEntries((remito.items || []).filter(it => (it.g || 0) === g).map(it => [it.cod, it.cant])),
+  }));
+}
+
 // Columnas a escribir: las fijas más las de los campos adicionales
 export function columnasCliente(cliente) {
   return { ...(cliente.excel?.columnas || {}), ...Object.fromEntries((cliente.extras || []).map(d => [d.campo, d.columna])) };
@@ -126,6 +153,7 @@ export function filasDeRemito(remito, catalogoItems) {
   const vaPlanilla = cod => (catalogoItems.find(i => String(i.cod) === String(cod))?.planilla) !== false;
   return remito.items
     .filter(it => it.cant > 0 && vaPlanilla(it.cod))
+    .sort((a, b) => (a.g || 0) - (b.g || 0)) // por grupo (línea), en el orden cargado
     .map(it => ({
       fechaSolicitud: fechaSerial(remito.fechaSolicitud),
       remito: remito.remito,
@@ -136,7 +164,8 @@ export function filasDeRemito(remito, catalogoItems) {
       periodo: remito.periodo ? fechaSerial(remito.periodo + '-01') : '',
       zona: remito.zona,
       responsable: remito.tecnico,
-      ...(remito.extras || {}), // campos adicionales del cliente (ej. línea, centro de costo, sector)
+      ...(remito.extras || {}), // campos adicionales del remito (ej. sector)
+      ...(remito.gruposExtras?.[it.g || 0] || {}), // y los de su grupo (ej. línea y centro de costo)
     }));
 }
 

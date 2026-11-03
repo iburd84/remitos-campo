@@ -1,7 +1,7 @@
 // Arranque, sesión, navegación y utilidades de interfaz compartidas.
 import { CONFIG, MODO_DEMO } from './config.js';
 import { cola, procesarCola } from './cola.js';
-import { masUsados, UNIDADES } from './excel.js';
+import { masUsados, UNIDADES, camposDeGrupo, valoresDeGrupo } from './excel.js';
 
 export const estado = { api: null, usuario: null, clientes: null };
 
@@ -72,6 +72,32 @@ function porUnidad(items, cant) {
       const g = items.filter(it => (it.negocio || 'ml') === k);
       return g.length ? desplegable(UNIDADES[k], g, cant) : '';
     }).join('');
+}
+
+// ---------- Grupos de un remito (ej. una línea de Halliburton cada uno) ----------
+
+export function chipsGrupo(defs, valores) {
+  const v = valoresDeGrupo(defs, valores);
+  return camposDeGrupo(defs).filter(d => d.quien === 'auto' && v[d.campo] !== '')
+    .map(d => `${esc(d.etiqueta)} <span class="chip">${esc(v[d.campo])}</span>`).join(' ');
+}
+
+// Cabecera del grupo g: sus campos para elegir (ej. Línea) y lo que se calcula de ellos (ej. Centro de costo)
+export function htmlCabeceraGrupo(defs, valores, g, total) {
+  const elegibles = camposDeGrupo(defs).filter(d => d.quien !== 'auto');
+  const titulo = elegibles[0]?.etiqueta || 'Grupo';
+  return `<div class="grupo-cab">
+    ${total > 1 ? `<div class="fila" style="justify-content:space-between"><b>${esc(titulo)} ${g + 1}</b>
+      ${g > 0 ? `<button type="button" class="peligro" data-quitar-grupo="${g}">Quitar</button>` : ''}</div>` : ''}
+    ${elegibles.map(d => {
+      const v = valores?.[d.campo] || '';
+      const ops = !v || (d.opciones || []).includes(v) ? d.opciones || [] : [v, ...(d.opciones || [])];
+      return `<label>${esc(d.etiqueta)}${d.obligatorio ? '' : ' (opcional)'}</label>
+        <select data-g="${g}" data-gextra="${esc(d.campo)}"><option value="">Elegir…</option>
+        ${ops.map(o => `<option ${o === v ? 'selected' : ''}>${esc(o)}</option>`).join('')}</select>`;
+    }).join('')}
+    <p class="ayuda" data-autos-g="${g}">${chipsGrupo(defs, valores)}</p>
+  </div>`;
 }
 
 // Formulario del técnico: "Más usados" arriba; el resto por unidad de negocio o en un desplegable
