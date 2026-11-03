@@ -1,9 +1,9 @@
 // Guarda la app en el celular para que abra sin señal. Solo archivos propios:
 // el login de Microsoft y SharePoint siempre van por la red.
-const VERSION = 'remitos-campo-1.7.0';
+const VERSION = 'remitos-campo-1.7.1';
 const ARCHIVOS = [
   './', 'index.html', 'styles.css', 'manifest.webmanifest',
-  'img/logo_alonger.jpg', 'img/alo.jpg',
+  'img/logo_alonger.jpg', 'img/icono-192.png', 'img/icono-512.png', 'img/icono-512-maskable.png', 'img/icono-apple-180.png',
   'vendor/msal-browser-4.30.0.min.js',
   'js/app.js', 'js/config.js', 'js/auth.js', 'js/graph.js', 'js/demo.js', 'js/excel.js',
   'js/pdf.js', 'js/cola.js', 'js/fotos.js', 'js/tecnico.js', 'js/revisor.js', 'js/setup.js',
